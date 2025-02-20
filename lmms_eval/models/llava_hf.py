@@ -87,6 +87,7 @@ class LlavaHf(lmms):
         else:
             self._device = torch.device(device)
             self.device_map = device_map
+        self.device_map = 'auto'
         if isinstance(dtype, str) and dtype != "auto":
             dtype = getattr(torch, dtype)
 
