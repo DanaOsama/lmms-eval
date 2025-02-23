@@ -21,9 +21,9 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
 
 @register_model("paligemma")
-class Paligemma(lmms):
+class PaliGemma(lmms):
     """
-    Paligemma Model
+    PaliGemma Model
     https://github.com/google-research/big_vision/tree/main/big_vision/evaluators/proj/paligemma
     """
 
@@ -53,10 +53,10 @@ class Paligemma(lmms):
         self._tokenizer = self._processor.tokenizer
         # self._model = AutoModelForCausalLM.from_pretrained(model_id_name, device_map=self._device, trust_remote_code=trust_remote_code, torch_dtype=dtype)
         # self._tokenizer = AutoTokenizer.from_pretrained(model_id_name, trust_remote_code=trust_remote_code)
-        # self.tokenizer.padding_side = "left"
-        self.tokenizer.pad_token_id = self.tokenizer.eod_id
+        # self._tokenizer.padding_side = "left"
+        self._tokenizer.pad_token_id = self._tokenizer.eod_id
         # TODO: CHECK THIS PROMPT.
-        self.prompt = "<img>{}</img>{}"
+        self.prompt = "answer en"
         self._config = self._model.config
         # self.model.tie_weights()
         self.batch_size_per_gpu = int(batch_size)
@@ -98,20 +98,19 @@ class Paligemma(lmms):
             return self.accelerator.unwrap_model(self._model)
         else:
             return self._model
+    
+    @property
+    def processor(self):
+        return self._processor
 
     @property
     def eot_token_id(self):
         # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
-        return self.tokenizer.eod_id
+        return self._tokenizer.eod_id
 
     @property
     def max_length(self):
         return self._max_length
-
-    # should be deleted since max_new_tokens is decided by gen_kwargs not a model property
-    # @property
-    # def max_new_tokens(self) -> int:
-    #     return 256
 
     @property
     def batch_size(self):
@@ -131,6 +130,19 @@ class Paligemma(lmms):
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
         raise NotImplementedError("Not implemented for Paligemma.")
+
+# TODO: Check if we need those functions
+#     def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
+#         """ """
+#         add_special_tokens = False if add_special_tokens is None else add_special_tokens
+#         encoding = self.tokenizer.encode(string, add_special_tokens=add_special_tokens)
+#         # left-truncate the encoded context to be at most `left_truncate_len` tokens long
+#         if left_truncate_len:
+#             encoding = encoding[-left_truncate_len:]
+#     return encoding
+
+    # def tok_decode(self, tokens):
+    #     return self.tokenizer.decode(tokens)
 
     # def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
     #     res = []
@@ -157,16 +169,16 @@ class Paligemma(lmms):
     #         context_query.append({"text": contexts})
     #         query.append({"text": contexts + continuation})
 
-    #         context_query = self.tokenizer.from_list_format(context_query)
-    #         query = self.tokenizer.from_list_format(query)
+    #         context_query = self._tokenizer.from_list_format(context_query)
+    #         query = self._tokenizer.from_list_format(query)
 
     #         raw_contxt_text, context_tokens = make_context(
-    #             self.tokenizer, context_query, history=None, system="You are a helpful assistant", max_window_size=self.model.generation_config.max_window_size, chat_format=self.model.generation_config.chat_format
+    #             self._tokenizer, context_query, history=None, system="You are a helpful assistant", max_window_size=self.model.generation_config.max_window_size, chat_format=self.model.generation_config.chat_format
     #         )
     #         context_tokens = torch.tensor([context_tokens])
 
     #         raw_continuation_text, continuation_tokens = make_context(
-    #             self.tokenizer, query, history=None, system="You are a helpful assistant", max_window_size=self.model.generation_config.max_window_size, chat_format=self.model.generation_config.chat_format
+    #             self._tokenizer, query, history=None, system="You are a helpful assistant", max_window_size=self.model.generation_config.max_window_size, chat_format=self.model.generation_config.chat_format
     #         )
     #         continuation_tokens = torch.tensor([continuation_tokens]).to(self.model.device)
     #         attn_mask = torch.ones_like(continuation_tokens).to(self.model.device)
@@ -193,6 +205,67 @@ class Paligemma(lmms):
     #             new_list.append(j)
     #     return new_list
 
+    # 🔹 What is a "Request" in `lmms_eval`?
+# A request is an instruction for the model to perform a task.
+# Each request is represented as an `Instance` object, which contains:
+# - The input (e.g., a text prompt or question).
+# - Metadata (e.g., dataset details, document ID).
+# - Generation settings (e.g., temperature, max tokens).
+#
+# Requests tell the model:
+# - What to do (e.g., generate text, calculate log-likelihood).
+# - How to do it (e.g., using certain hyperparameters).
+
+# 🔹 What are the Three Request Types?
+# lmms_eval supports three types of requests:
+# 1. `loglikelihood` - Computes the probability of a given continuation.
+# 2. `multiple_choice` - Evaluates the model’s ability to pick the most likely answer among choices.
+# 3. `generate_until` - Generates text until a stopping condition is met.
+
+# 🔹 What is an `Instance`?
+# A request is stored inside an `Instance` object, which contains:
+# - `request_type`: One of `loglikelihood`, `multiple_choice`, or `generate_until`.
+# - `args`: The actual input arguments for the model.
+# - Other metadata like `idx` (index in batch) and extra settings.
+
+# 🔹 Example `Instance` for `generate_until` request:
+# Instance(
+#     request_type="generate_until",
+#     arguments=("What is in the image?", {"max_new_tokens": 128, "temperature": 0.7}, doc_to_visual, 101, "VQA", "test"),
+#     idx=0
+# )
+# This tells the model:
+# - Task: Generate text ("generate_until").
+# - Input text: "What is in the image?"
+# - Generation settings: { "max_new_tokens": 128, "temperature": 0.7 }
+# - Image processing function: `doc_to_visual`
+# - Dataset details: `doc_id = 101`, `task = "VQA"`, `split = "test"`
+
+# 🔹 What are the `arguments` in a Request?
+# For "generate_until", the `arguments` contain:
+# 1. `contexts` - The text prompt for the model (could contain `<image>` tokens).
+# 2. `all_gen_kwargs` - A dictionary of generation parameters (e.g., max tokens, temperature).
+# 3. `doc_to_visual` - A function that retrieves and processes images related to the request.
+# 4. `doc_id` - The document ID from the dataset.
+# 5. `task` - The evaluation task (e.g., "VQA" for visual question answering).
+# 6. `split` - The dataset split (e.g., "train", "test", "val").
+
+# 🔹 Where is This Used?
+# The function `construct_requests` creates `Instance` objects for different tasks.
+# Then, in `generate_until`, we extract the arguments from the requests like this:
+# contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
+# This unpacks all the `arguments` from multiple `Instance` objects in a batch.
+
+# 🔹 Summary:
+# ✔ A request is an instruction to the model (e.g., "generate text" or "evaluate likelihood").
+# ✔ Requests are stored as `Instance` objects with `request_type` and `arguments`.
+# ✔ `generate_until` requests include:
+#    - A text input (`contexts`).
+#    - Generation parameters (`all_gen_kwargs`).
+#    - Image processing function (`doc_to_visual`).
+#    - Dataset details (`doc_id`, `task`, `split`).
+# ✔ The function `construct_requests` creates these requests, and `generate_until` processes them. 🚀
+
     def generate_until(self, requests: List[Instance]) -> List[str]:
         res = []
 
@@ -203,7 +276,7 @@ class Paligemma(lmms):
             #   padded context length. this is useful to simplify the batching logic and more importantly to make
             #   automatic adaptive batches much much easier to implement
             # - any OOMs will happen right away rather than near the end
-            toks = self.tokenizer.encode(x[0])
+            toks = self._processor.tokenizer.encode(x[0])
             return -len(toks), x[0]
 
         pbar = tqdm(total=len(requests), disable=(self.rank != 0), desc="Model Responding")
@@ -213,18 +286,26 @@ class Paligemma(lmms):
         re_ords = utils.Collator([reg.args for reg in requests], _collate, grouping=True)
         chunks = re_ords.get_batched(n=self.batch_size, batch_fn=None)
         for chunk in chunks:
+            # The variable contexts contains the text prompts.
             contexts, all_gen_kwargs, doc_to_visual, doc_id, task, split = zip(*chunk)
+            # The task and split values are the same across all requests in a batch.
+            # We extract just the first value since all should be identical.
             task = task[0]
             split = split[0]
+            
+            # TODO: Check how to deal with multiple images in one request
+
+            # Convert document IDs into processed images using the first function in doc_to_visual
             visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]
             visuals = self.flatten(visuals)
-            visual_paths = []
+            # visual_paths = []
+
             # save images to /tmp, name generated by hash function
             # qwen accept image path. Have to do it here....
-            for visual in visuals:
-                name = uuid.uuid4().hex.upper()[0:6]
-                visual.save(f"/tmp/{name}.png")
-                visual_paths.append(f"/tmp/{name}.png")
+            # for visual in visuals:
+            #     name = uuid.uuid4().hex.upper()[0:6]
+            #     visual.save(f"/tmp/{name}.png")
+            #     visual_paths.append(f"/tmp/{name}.png")
 
             # we assume all gen kwargs in the batch are the same
             # this is safe to assume because the `grouper` object ensures it.
@@ -241,48 +322,56 @@ class Paligemma(lmms):
                 elif not isinstance(until, list):
                     raise ValueError(f"Expected `gen_kwargs['until']` to be of type Union[str,list] but got {type(until)}")
 
-            if isinstance(contexts, tuple):
-                contexts = list(contexts)
+            assert self.batch_size_per_gpu == 1, "Do not support batch_size_per_gpu > 1 for now"
+            context = contexts[0]
+            
 
-            for i in range(len(contexts)):
-                if "<image>" in contexts[i]:
-                    contexts[i] = contexts[i].replace("<image>", "")
+            # if isinstance(contexts, tuple):
+            #     contexts = list(contexts)
 
-            # Similar to llava, is visual paths has len 0
+            # # Some text prompts may include the placeholder "<image>" where an image was referenced.
+            # # This removes "<image>" because the image is processed separately.
+            # for i in range(len(contexts)):
+            #     if "<image>" in contexts[i]:
+            #         contexts[i] = contexts[i].replace("<image>", "")
+
+            # Similar to llava, if visual paths has len 0
             # Then nothing will be executed
-            query = []
-            if len(visual_paths) == 0:
-                for context in contexts:
-                    query.append({"text": context})
-            else:
-                for visual_path, context in zip(visual_paths, contexts):
-                    query.append({"image": visual_path})
-                    query.append({"text": context})
-
-            questions = self.tokenizer.from_list_format(query)
-            input_ids = self.tokenizer(questions, return_tensors="pt", padding="longest")
+            # query = []
+            # if len(visual_paths) == 0:
+            #     for context in contexts:
+            #         query.append({"text": context})
+            # else:
+            #     for visual_path, context in zip(visual_paths, contexts):
+            #         query.append({"image": visual_path})
+            #         query.append({"text": context})
+            
+            # TODO: Check the format of visuals acceptable for the Paligemma processor. I believe it is a PIL Image.
+            # TODO: Check how to add support for multiple images.
+            # questions = self.tokenizer.from_list_format(query)
+            # input_ids = self.tokenizer(questions, return_tensors="pt", padding="longest")
+            inputs = self.processor(images=visuals, text=context, return_tensors="pt").to(self.device, self.model.dtype)
 
             # preconfigure gen_kwargs with defaults
             if "image_sizes" not in gen_kwargs:
                 try:
-                    gen_kwargs["image_sizes"] = [visuals[0].size]
+                    gen_kwargs["image_sizes"] = [visuals[0].size] # set size of the first image
                 except:
                     gen_kwargs["image_sizes"] = None
             if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 1024
+                gen_kwargs["max_new_tokens"] = 1024 # Default max output tokens
             if "temperature" not in gen_kwargs:
-                gen_kwargs["temperature"] = 0
+                gen_kwargs["temperature"] = 0 # Greedy decoding by default
             if "top_p" not in gen_kwargs:
-                gen_kwargs["top_p"] = None
+                gen_kwargs["top_p"] = None # No nucleus sampling
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
 
             pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eod_id
-
+            try:
             cont = self.model.generate(
-                input_ids.input_ids.to(self.device),
-                attention_mask=input_ids.attention_mask.to(self.device),
-                eos_token_id=self.tokenizer.eod_id,
+                **inputs, # Unpack the dictionary 'inputs' as keyword arguments (likely contains 'input_ids' and 'attention_mask')
+                eos_token_id=self.eot_token_id,
                 pad_token_id=pad_token_id,
                 do_sample=True if gen_kwargs["temperature"] > 0 else False,
                 temperature=gen_kwargs["temperature"],
@@ -293,28 +382,31 @@ class Paligemma(lmms):
                 # kwargs=gen_kwargs
             )
 
-            cont_toks_list = cont.tolist()
-            for cont_toks, context in zip(cont_toks_list, contexts):
-                # discard context + left-padding toks if using causal decoder-only LMM
-                cont_toks = cont_toks[input_ids.input_ids.shape[1] :]
-                text_outputs = self.tokenizer.decode(cont_toks, skip_special_tokens=True).strip()
-                for term in until:
-                    if len(term) > 0:
-                        # ignore '' separator,
-                        # for seq2seq case where self.tok_decode(self.eot_token_id) = ''
-                        text_outputs = text_outputs.split(term)[0]
+            except Exception as e:
+                eval_logger.error(f"Error {e} in generating")
+                cont = ""
 
-                res.append(text_outputs)
+            # This line does what the following 3 lines of code do, but I kept the below so I understand it better
+            # text_outputs = processor.decode(output[0], skip_special_tokens=True)[inputs.input_ids.shape[1]: ]
 
-                self.cache_hook.add_partial("generate_until", (context, gen_kwargs), text_outputs)
-                # remove visuals from tmp
-                for visual_path in visual_paths:
-                    try:
-                        os.remove(visual_path)
-                    except:
-                        pass
-                pbar.update(1)
-            # reorder this group of results back to original unsorted form
+            # Decode the first generated sequence, removing special tokens
+            decoded_text = processor.decode(output[0], skip_special_tokens=True)
+
+            # Get the number of tokens in the original input prompt
+            prompt_length = inputs.input_ids.shape[1]
+
+            # Slice the decoded text to keep only the newly generated part (excluding the prompt)
+            text_outputs = decoded_text[prompt_length:]
+
+            if self.accelerator.is_main_process and doc_id[0] % 100 == 0:
+                eval_logger.debug(f"Generated text for doc ID {doc_id[0]}:\n\n{text_outputs}\n")
+
+            res.append(text_outputs)
+            self.cache_hook.add_partial("generate_until", (context, gen_kwargs), text_outputs)
+            
+            # Update the progress bar by 1 step to reflect progress in processing requests.
+            pbar.update(1)
+        # reorder this group of results back to original unsorted form
         res = re_ords.get_original(res)
 
         pbar.close()
