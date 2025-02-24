@@ -20,6 +20,31 @@ from loguru import logger as eval_logger
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from transformers import AutoProcessor, PaliGemmaForConditionalGeneration
 
+"""
+Command to run:
+----------------
+python3 -m accelerate.commands.launch \
+    --num_processes=1 \
+    -m lmms_eval \
+    --model paligemma \
+    --model_args model_id_name=google/paligemma-3b-ft-ocrvqa-896,prefix="answer en"\
+    --tasks textvqa,stvqa,infovqa,docvqa\
+    --batch_size 1 \
+    --log_samples \
+    --log_samples_suffix paligemma_ocrvqa_896 \
+    --output_path ./logs/
+
+-----
+Different checkpoints to be used:
+    - google/paligemma-3b-ft-ocrvqa-896 
+    - google/paligemma-3b-ft-stvqa-896
+    - google/paligemma-3b-ft-textvqa-896
+
+Note: Login to huggingface and make sure to acknowledge 
+    the terms and conditions on HF's model card.
+"""
+
+
 @register_model("paligemma")
 class PaliGemma(lmms):
     """
@@ -29,12 +54,13 @@ class PaliGemma(lmms):
 
     def __init__(
         self,
-        model_id_name: str = "google/paligemma-3b-mix-224",
+        model_id_name: str = "google/paligemma-3b-ft-ocrvqa-896",
         device: Optional[str] = "cuda",
         dtype: Optional[Union[str, torch.dtype]] = "auto",
         batch_size: Optional[Union[int, str]] = 1,
         trust_remote_code: Optional[bool] = True,
         use_cache=True,
+        prefix="answer en",
         **kwargs,
     ) -> None:
         super().__init__()
@@ -51,24 +77,51 @@ class PaliGemma(lmms):
         self._processor = AutoProcessor.from_pretrained(model_id_name)
         self._processor.tokenizer.padding_side = "left"
         self._tokenizer = self._processor.tokenizer
-        # self._model = AutoModelForCausalLM.from_pretrained(model_id_name, device_map=self._device, trust_remote_code=trust_remote_code, torch_dtype=dtype)
+        # self._model = AutoModelForCausalLM.from_pretrained(model_id_name, device=self._device, trust_remote_code=trust_remote_code, torch_dtype=dtype)
         # self._tokenizer = AutoTokenizer.from_pretrained(model_id_name, trust_remote_code=trust_remote_code)
         # self._tokenizer.padding_side = "left"
-        self._tokenizer.pad_token_id = self._tokenizer.eod_id
-        # TODO: CHECK THIS PROMPT.
-        self.prompt = "answer en"
+        # self._tokenizer.pad_token_id = self._tokenizer.eos_token 
+
+        # prefix for paligemma is "answer en" for VQA tasks in English, or "caption en\n" for captioning.
+        self.prefix = prefix
         self._config = self._model.config
         # self.model.tie_weights()
         self.batch_size_per_gpu = int(batch_size)
         assert self.batch_size_per_gpu == 1, "batch_size_per_gpu > 1 is not supported for now."
 
         self.use_cache = use_cache
-        if accelerator.num_processes > 1:
-            assert accelerator.distributed_type in [
-                DistributedType.FSDP,
-                DistributedType.MULTI_GPU,
-            ], "Unsupported distributed type provided. Only DDP and FSDP are supported."
-            if accelerator.distributed_type == DistributedType.FSDP:
+        # if accelerator.num_processes > 1:
+        #     assert accelerator.distributed_type in [
+        #         DistributedType.FSDP,
+        #         DistributedType.MULTI_GPU,
+        #         DistributedType.DEEPSPEED
+        #     ], "Unsupported distributed type provided. Only DDP and FSDP are supported."
+        #     if accelerator.distributed_type == DistributedType.FSDP:
+        #         self._model = accelerator.prepare(self.model)
+        #     else:
+        #         self._model = accelerator.prepare_model(self.model, evaluation_mode=True)
+        #     self.accelerator = accelerator
+        #     if self.accelerator.is_local_main_process:
+        #         eval_logger.info(f"Using {accelerator.num_processes} devices with data parallelism")
+        #     self._rank = self.accelerator.local_process_index
+        #     self._world_size = self.accelerator.num_processes
+        # else:
+        #     self.model.to(self._device)
+        #     self._rank = 0
+        #     self._world_size = 1
+        if accelerator.num_processes > 1 and device == "":
+            assert accelerator.distributed_type in [DistributedType.FSDP, DistributedType.MULTI_GPU, DistributedType.DEEPSPEED], "Unsupported distributed type provided. Only DDP and FSDP are supported."
+            # If you want to use DistributedType.DEEPSPEED, you have to run accelerate config before using the model
+            # Also, you have to select zero stage 0 (equivalent to DDP) in order to make the prepare model works
+            # I tried to set different parameters in the kwargs to let default zero 2 stage works, but it didn't work.
+            if accelerator.distributed_type == DistributedType.DEEPSPEED:
+                kwargs = {
+                    "train_micro_batch_size_per_gpu": self.batch_size_per_gpu,
+                    "train_batch_size": self.batch_size_per_gpu * accelerator.num_processes,
+                }
+                AcceleratorState().deepspeed_plugin.deepspeed_config_process(must_match=True, **kwargs)
+                eval_logger.info("Detected that you are using DistributedType.DEEPSPEED. Make sure you run `accelerate config` and set zero stage to 0")
+            if accelerator.distributed_type == DistributedType.FSDP or accelerator.distributed_type == DistributedType.DEEPSPEED:
                 self._model = accelerator.prepare(self.model)
             else:
                 self._model = accelerator.prepare_model(self.model, evaluation_mode=True)
@@ -77,10 +130,16 @@ class PaliGemma(lmms):
                 eval_logger.info(f"Using {accelerator.num_processes} devices with data parallelism")
             self._rank = self.accelerator.local_process_index
             self._world_size = self.accelerator.num_processes
+        elif accelerator.num_processes == 1 and device == "auto":
+            eval_logger.info(f"Using {accelerator.num_processes} devices with pipeline parallelism")
+            self._rank = 0
+            self._world_size = 1
         else:
+            eval_logger.info(f"Using single device: {self._device}")
             self.model.to(self._device)
             self._rank = 0
             self._world_size = 1
+        self.accelerator = accelerator
 
     @property
     def config(self):
@@ -104,9 +163,8 @@ class PaliGemma(lmms):
         return self._processor
 
     @property
-    def eot_token_id(self):
-        # we use EOT because end of *text* is more accurate for what we're doing than end of *sentence*
-        return self._tokenizer.eod_id
+    def eos_token_id(self):
+        return self._tokenizer.eos_token_id
 
     @property
     def max_length(self):
@@ -130,6 +188,13 @@ class PaliGemma(lmms):
 
     def loglikelihood(self, requests: List[Instance]) -> List[Tuple[float, bool]]:
         raise NotImplementedError("Not implemented for Paligemma.")
+    
+    def flatten(self, input):
+        new_list = []
+        for i in input:
+            for j in i:
+                new_list.append(j)
+        return new_list
 
 # TODO: Check if we need those functions
 #     def tok_encode(self, string: str, left_truncate_len=None, add_special_tokens=None) -> List[int]:
@@ -294,7 +359,6 @@ class PaliGemma(lmms):
             split = split[0]
             
             # TODO: Check how to deal with multiple images in one request
-
             # Convert document IDs into processed images using the first function in doc_to_visual
             visuals = [doc_to_visual[0](self.task_dict[task][split][ids]) for ids in doc_id]
             visuals = self.flatten(visuals)
@@ -312,7 +376,8 @@ class PaliGemma(lmms):
             gen_kwargs = all_gen_kwargs[0]
 
             # Set default values for until and max_new_tokens
-            until = [self.tokenizer.decode(self.eot_token_id)]
+            # breakpoint()
+            until = [self.tokenizer.decode(self.eos_token_id)]
 
             # Update values from gen_kwargs if present
             if "until" in gen_kwargs:
@@ -321,9 +386,10 @@ class PaliGemma(lmms):
                     until = [until]
                 elif not isinstance(until, list):
                     raise ValueError(f"Expected `gen_kwargs['until']` to be of type Union[str,list] but got {type(until)}")
-
+            
             assert self.batch_size_per_gpu == 1, "Do not support batch_size_per_gpu > 1 for now"
             context = contexts[0]
+            text = " ".join(['<image>' * len(visuals), self.prefix, context])
             
 
             # if isinstance(contexts, tuple):
@@ -350,7 +416,7 @@ class PaliGemma(lmms):
             # TODO: Check how to add support for multiple images.
             # questions = self.tokenizer.from_list_format(query)
             # input_ids = self.tokenizer(questions, return_tensors="pt", padding="longest")
-            inputs = self.processor(images=visuals, text=context, return_tensors="pt").to(self.device, self.model.dtype)
+            inputs = self.processor(images=visuals, text=text, return_tensors="pt").to(self.device, self.model.dtype)
 
             # preconfigure gen_kwargs with defaults
             if "image_sizes" not in gen_kwargs:
@@ -359,7 +425,8 @@ class PaliGemma(lmms):
                 except:
                     gen_kwargs["image_sizes"] = None
             if "max_new_tokens" not in gen_kwargs:
-                gen_kwargs["max_new_tokens"] = 1024 # Default max output tokens
+                # gen_kwargs["max_new_tokens"] = 1024 # Default max output tokens
+                gen_kwargs["max_new_tokens"] = 6144 # Default max output tokens
             if "temperature" not in gen_kwargs:
                 gen_kwargs["temperature"] = 0 # Greedy decoding by default
             if "top_p" not in gen_kwargs:
@@ -367,36 +434,36 @@ class PaliGemma(lmms):
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
 
-            pad_token_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else self.tokenizer.eod_id
+            # pad_token = self.tokenizer.pad_token if self.tokenizer.pad_token_id is not None else self.tokenizer.eod_id
             try:
-            cont = self.model.generate(
-                **inputs, # Unpack the dictionary 'inputs' as keyword arguments (likely contains 'input_ids' and 'attention_mask')
-                eos_token_id=self.eot_token_id,
-                pad_token_id=pad_token_id,
-                do_sample=True if gen_kwargs["temperature"] > 0 else False,
-                temperature=gen_kwargs["temperature"],
-                top_p=gen_kwargs["top_p"],
-                num_beams=gen_kwargs["num_beams"],
-                max_new_tokens=gen_kwargs["max_new_tokens"],
-                use_cache=self.use_cache,
-                # kwargs=gen_kwargs
-            )
+                cont = self.model.generate(
+                    **inputs, # Unpack the dictionary 'inputs' as keyword arguments (likely contains 'input_ids' and 'attention_mask')
+                    eos_token_id=self.eos_token_id,
+                    pad_token_id=self.eos_token_id,
+                    do_sample=True if gen_kwargs["temperature"] > 0 else False,
+                    temperature=gen_kwargs["temperature"],
+                    top_p=gen_kwargs["top_p"],
+                    num_beams=gen_kwargs["num_beams"],
+                    max_new_tokens=gen_kwargs["max_new_tokens"],
+                    use_cache=self.use_cache,
+                    # kwargs=gen_kwargs
+                )
 
             except Exception as e:
                 eval_logger.error(f"Error {e} in generating")
                 cont = ""
 
             # This line does what the following 3 lines of code do, but I kept the below so I understand it better
-            # text_outputs = processor.decode(output[0], skip_special_tokens=True)[inputs.input_ids.shape[1]: ]
-
+            text_outputs = self.processor.decode(cont[0], skip_special_tokens=True)[inputs.input_ids.shape[1]: ]
+            print("Text_output:", text_outputs)
             # Decode the first generated sequence, removing special tokens
-            decoded_text = processor.decode(output[0], skip_special_tokens=True)
+            # decoded_text = self.processor.decode(cont[0], skip_special_tokens=True)
+            # breakpoint()
+            # # Get the number of tokens in the original input prompt
+            # prompt_length = inputs.input_ids.shape[1]
 
-            # Get the number of tokens in the original input prompt
-            prompt_length = inputs.input_ids.shape[1]
-
-            # Slice the decoded text to keep only the newly generated part (excluding the prompt)
-            text_outputs = decoded_text[prompt_length:]
+            # # Slice the decoded text to keep only the newly generated part (excluding the prompt)
+            # text_outputs = decoded_text[prompt_length:]
 
             if self.accelerator.is_main_process and doc_id[0] % 100 == 0:
                 eval_logger.debug(f"Generated text for doc ID {doc_id[0]}:\n\n{text_outputs}\n")
