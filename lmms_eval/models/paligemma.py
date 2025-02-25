@@ -389,8 +389,9 @@ class PaliGemma(lmms):
             
             assert self.batch_size_per_gpu == 1, "Do not support batch_size_per_gpu > 1 for now"
             context = contexts[0]
+            # text = " ".join([self.prefix, context])
             text = " ".join(['<image>' * len(visuals), self.prefix, context])
-            
+
 
             # if isinstance(contexts, tuple):
             #     contexts = list(contexts)
@@ -425,18 +426,35 @@ class PaliGemma(lmms):
                 except:
                     gen_kwargs["image_sizes"] = None
             if "max_new_tokens" not in gen_kwargs:
-                # gen_kwargs["max_new_tokens"] = 1024 # Default max output tokens
-                gen_kwargs["max_new_tokens"] = 6144 # Default max output tokens
+                gen_kwargs["max_new_tokens"] = 20 # Default max output tokens
+                # gen_kwargs["max_new_tokens"] = 6144 # Default max output tokens
             if "temperature" not in gen_kwargs:
-                gen_kwargs["temperature"] = 0 # Greedy decoding by default
+                gen_kwargs["temperature"] = 1 # Greedy decoding by default is temp=0
             if "top_p" not in gen_kwargs:
                 gen_kwargs["top_p"] = None # No nucleus sampling
             if "num_beams" not in gen_kwargs:
                 gen_kwargs["num_beams"] = 1
 
             # pad_token = self.tokenizer.pad_token if self.tokenizer.pad_token_id is not None else self.tokenizer.eod_id
-            try:
-                cont = self.model.generate(
+            # try:
+            #     output = self.model.generate(
+            #         **inputs, # Unpack the dictionary 'inputs' as keyword arguments (likely contains 'input_ids' and 'attention_mask')
+            #         eos_token_id=self.eos_token_id,
+            #         pad_token_id=self.eos_token_id,
+            #         do_sample=True if gen_kwargs["temperature"] > 0 else False,
+            #         temperature=gen_kwargs["temperature"],
+            #         top_p=gen_kwargs["top_p"],
+            #         num_beams=gen_kwargs["num_beams"],
+            #         max_new_tokens=gen_kwargs["max_new_tokens"],
+            #         use_cache=self.use_cache,
+            #         # kwargs=gen_kwargs
+            #     )
+
+            # except Exception as e:
+            #     eval_logger.error(f"Error {e} in generating")
+            #     output = ""
+
+            output = self.model.generate(
                     **inputs, # Unpack the dictionary 'inputs' as keyword arguments (likely contains 'input_ids' and 'attention_mask')
                     eos_token_id=self.eos_token_id,
                     pad_token_id=self.eos_token_id,
@@ -447,17 +465,21 @@ class PaliGemma(lmms):
                     max_new_tokens=gen_kwargs["max_new_tokens"],
                     use_cache=self.use_cache,
                     # kwargs=gen_kwargs
-                )
-
-            except Exception as e:
-                eval_logger.error(f"Error {e} in generating")
-                cont = ""
+            )
 
             # This line does what the following 3 lines of code do, but I kept the below so I understand it better
-            text_outputs = self.processor.decode(cont[0], skip_special_tokens=True)[inputs.input_ids.shape[1]: ]
-            print("Text_output:", text_outputs)
+            # breakpoint()
+            # text_outputs = self.processor.decode(output[0], skip_special_tokens=True)[inputs.input_ids.shape[1]: ]
+            # text_outputs = self.processor.decode(output[0], skip_special_tokens=True).replace(text, "")
+            decoded_text = self.processor.decode(output[0], skip_special_tokens=True)
+            prompt_text = self.processor.decode(inputs.input_ids[0], skip_special_tokens=True)
+
+            # Remove the prompt from the generated output
+            text_outputs = decoded_text[len(prompt_text):].strip()
+            
+            # print("Text_output:", text_outputs)
             # Decode the first generated sequence, removing special tokens
-            # decoded_text = self.processor.decode(cont[0], skip_special_tokens=True)
+            # decoded_text = self.processor.decode(output[0], skip_special_tokens=True)
             # breakpoint()
             # # Get the number of tokens in the original input prompt
             # prompt_length = inputs.input_ids.shape[1]
