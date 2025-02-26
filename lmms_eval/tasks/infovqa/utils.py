@@ -1,6 +1,6 @@
 import json
 import os
-
+from datetime import datetime
 from loguru import logger as eval_logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
@@ -25,7 +25,11 @@ def infovqa_test_process_results(doc, results):
 
 def infovqa_test_aggregate_results(results, args):
     # save results as json
-    file = generate_submission_file("infovqa_test_for_submission.json", args)
+    # Generate a timestamp in the format YYYYMMDD_HHMMSS
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    filename = f"infovqa_test_for_submission_{timestamp}.json"
+    file = generate_submission_file(filename, args)
     with open(file, "w") as f:
         json.dump(results, f)
     eval_logger.info(f"Results saved to {file}")
