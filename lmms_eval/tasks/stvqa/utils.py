@@ -1,5 +1,5 @@
 import json
-
+from datetime import datetime
 from loguru import logger
 
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
@@ -22,7 +22,11 @@ def stvqa_process_results(doc, results):
 
 
 def stvqa_aggregate_submissions(results, args):
-    file = generate_submission_file("stvqa_test_for_submission.json", args)
+    # Generate a timestamp in the format YYYYMMDD_HHMMSS
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"stvqa_test_for_submission_{timestamp}.json"
+    
+    file = generate_submission_file(filename, args)
     with open(file, "w") as f:
         json.dump(results, f)
     logger.info(f"Results saved to {file}")
