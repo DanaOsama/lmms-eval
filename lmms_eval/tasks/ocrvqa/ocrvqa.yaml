@@ -1,0 +1,5 @@
+group: ocrvqa
+task:
+- ocrvqa_val
+- ocrvqa_test
+- ocrvqa_train

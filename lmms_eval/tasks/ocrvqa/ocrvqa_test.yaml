@@ -1,0 +1,17 @@
+task: "ocrvqa_test"
+test_split: test
+output_type: generate_until
+process_results: !function utils.ocrvqa_test_process_results
+metric_list:
+  - metric: exact_match
+    aggregation: mean
+    higher_is_better: true
+    ignore_case: true
+    ignore_punctuation: true
+  - metric: anls
+    aggregation: mean
+    higher_is_better: true
+  - metric: submission
+    aggregation: !function utils.ocrvqa_test_aggregate_results
+    higher_is_better: true
+include: _default_template_ocrvqa_yaml
