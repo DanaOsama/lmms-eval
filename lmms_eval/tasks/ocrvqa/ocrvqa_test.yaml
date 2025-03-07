@@ -1,7 +1,7 @@
 task: "ocrvqa_test"
 test_split: test
 output_type: generate_until
-process_results: !function utils.ocrvqa_test_process_results
+process_results: !function utils.ocrvqa_process_results
 metric_list:
   - metric: exact_match
     aggregation: mean
@@ -12,6 +12,6 @@ metric_list:
     aggregation: mean
     higher_is_better: true
   - metric: submission
-    aggregation: !function utils.ocrvqa_test_aggregate_results
+    aggregation: !function utils.ocrvqa_aggregate_submissions
     higher_is_better: true
 include: _default_template_ocrvqa_yaml

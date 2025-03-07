@@ -1,5 +1,4 @@
 dataset_path: howard-hou/OCR-VQA
-dataset_name: OCRVQA
 output_type: generate_until
 doc_to_visual: !function utils.ocrvqa_doc_to_visual
 doc_to_text: !function utils.ocrvqa_doc_to_text
