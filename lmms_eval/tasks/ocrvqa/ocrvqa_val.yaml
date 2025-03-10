@@ -1,5 +1,5 @@
 task: "ocrvqa_val"
-test_split: validaion
+test_split: validation
 output_type: generate_until
 process_results: !function utils.ocrvqa_process_results
 metric_list:

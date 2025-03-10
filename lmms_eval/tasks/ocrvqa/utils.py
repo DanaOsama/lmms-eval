@@ -19,6 +19,7 @@ def ocrvqa_doc_to_visual(doc):
 
 # From textvqa
 def ocrvqa_process_results(doc, result):
+    breakpoint()
     eval_ai_processor = EvalAIAnswerProcessor()
     assert len(results) == len(doc["questions"]), (
         f"Expected {len(doc['questions'])} results, but got {len(results)}."
