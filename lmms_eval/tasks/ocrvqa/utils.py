@@ -11,6 +11,7 @@ from loguru import logger as eval_logger
 from lmms_eval.tasks._task_utils.file_utils import generate_submission_file
 from lmms_eval.tasks._task_utils.vqa_eval_metric import EvalAIAnswerProcessor
 
+# Task link on HF: https://huggingface.co/datasets/howard-hou/OCR-VQA
 
 def ocrvqa_doc_to_visual(doc):
     return [doc["image"].convert("RGB")]
@@ -19,35 +20,37 @@ def ocrvqa_doc_to_visual(doc):
 # From textvqa
 def ocrvqa_process_results(doc, result):
     eval_ai_processor = EvalAIAnswerProcessor()
-    assert len(result) == 1, f"The result should be a list of length 1, but got {len(result)}."
-    resAns = eval_ai_processor(result[0])
-    accuracy = 0
+    assert len(results) == len(doc["questions"]), (
+        f"Expected {len(doc['questions'])} results, but got {len(results)}."
+    )
+    # resAns = eval_ai_processor(result[0])
+    # accuracy = 0
 
-    if "answers" in doc and doc["answers"] is not None:
-        gtAcc = []
+    processed_answers = [eval_ai_processor(ans) for ans in results]
+    gt_answers = [eval_ai_processor(ans) for ans in doc["answers"]]
 
-        for i in range(len(doc["answers"])):
-            doc["answers"][i] = eval_ai_processor(doc["answers"][i])
+    accuracies = []
+    for pred, gt in zip(processed_answers, gt_answers):
+        matching_gt = [ans for ans in gt_answers if ans == pred]
+        accuracy = min(1, len(matching_gt) / 3)
+        accuracies.append(accuracy)
+    
+    # Compute a single accuracy metric for the entire image
+    image_accuracy = statistics.mean(accuracies) if accuracies else 0
 
-        for i in range(len(doc["answers"])):
-            otherGTAns = [doc["answers"][j] for j in range(len(doc["answers"])) if i != j]
-            matchingAns = [item for item in otherGTAns if item == resAns]
-            acc = min(1, float(len(matchingAns)) / 3)
-            gtAcc.append(acc)
-        accuracy = statistics.mean(gtAcc)
 
     return {
         "exact_match": accuracy,
         "submission": {
             "question_id": doc["question_id"],
-            "answer": resAns,
+            "answers": processed_answers,
         },
     }
 
 
 def ocrvqa_doc_to_text(doc, lmms_eval_specific_kwargs=None):
     pre_prompt = ""
-    post_post = ""
+    post_prompt = ""
     ocr_ref = ""
     if lmms_eval_specific_kwargs:
         if "pre_prompt" in lmms_eval_specific_kwargs:
@@ -56,7 +59,13 @@ def ocrvqa_doc_to_text(doc, lmms_eval_specific_kwargs=None):
             post_prompt = lmms_eval_specific_kwargs["post_prompt"]
         if "ocr" in lmms_eval_specific_kwargs and lmms_eval_specific_kwargs["ocr"]:
             ocr_ref = f"\nReference OCR token: {', '.join(doc['ocr_tokens'])}"
-    return f"{pre_prompt}{doc['question'].capitalize()}{ocr_ref}{post_prompt}"
+    # return f"{pre_prompt}{doc['questions'][0].capitalize()}{ocr_ref}{post_prompt}"
+
+    # Since OCRVQA has multiple questions for one image, we join them.
+    # Format all questions
+    formatted_questions = "\n".join([f"Q{i+1}: {q.capitalize()}" for i, q in enumerate(doc["questions"])])
+
+    return f"{pre_prompt}\n{formatted_questions}{ocr_ref}{post_prompt}"
 
 
 def ocrvqa_aggregate_submissions(results, args):
